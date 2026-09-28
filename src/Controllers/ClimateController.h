@@ -31,20 +31,11 @@ public:
 
 private:
     /**
-     * Fan rule: hysteresis between FAN_ON_TEMP and FAN_OFF_TEMP decides
-     * whether the fans run at all, then a linear ramp up to FAN_FULL_TEMP
-     * decides how fast.
+     * Fan rule: hysteresis between FAN_ON_TEMP and FAN_OFF_TEMP, and nothing
+     * else. The fans are relay-switched, so the only question is whether they
+     * run - there is no speed to choose.
      */
     void updateFans(const EnvironmentData& data);
-
-    /**
-     * Turns a temperature into a 1-100 speed along the ramp.
-     *
-     * The result is deliberately abstract: this class does not know what duty
-     * either fan can actually use, and each Fan maps the number onto its own
-     * usable window (Settings::FANx_MIN_DUTY_PERCENT and ..._MAX_...).
-     */
-    static uint8_t speedFor(float temperature);
 
     // Hatch rule: open on high temperature or strong light, close only when
     // both have fallen back through their lower thresholds.

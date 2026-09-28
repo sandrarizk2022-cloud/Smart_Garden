@@ -40,8 +40,8 @@ public:
      * keeps the display dependent only on plain values.
      */
     void update(const EnvironmentData& environment,
-                uint8_t fan1Percent,
-                uint8_t fan2Percent,
+                bool fan1State,
+                bool fan2State,
                 bool pumpState,
                 bool ventState);
 
@@ -49,8 +49,8 @@ private:
     // One method per page, each rendering exactly two lines.
     void renderEnvironmentPage(const EnvironmentData& environment);
     void renderLightSoilPage(const EnvironmentData& environment);
-    void renderActuatorPage(uint8_t fan1Percent,
-                            uint8_t fan2Percent,
+    void renderActuatorPage(bool fan1State,
+                            bool fan2State,
                             bool pumpState,
                             bool ventState);
 

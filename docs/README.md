@@ -37,11 +37,13 @@ The system should operate autonomously and should not require manual interventio
 | Cooling Fans (x2)    | Greenhouse temperature regulation        |
 | Servo Motor          | Controls ventilation hatch/window        |
 | Water Pump           | Irrigation                               |
-| Relay/MOSFET Driver  | Interface ESP32 with the pump            |
+| Relay Module         | Switches the two fans and the pump       |
 
-For the pump, the ESP32 should not drive the load directly. An appropriate relay module or MOSFET driver should be used.
+The ESP32 should not drive any of these loads directly. Three switched channels are needed — one per fan, plus the pump — so a 4-channel relay module is the convenient part, with the spare channel left for future use.
 
-The two cooling fans are 5 V 3-pin units (VCC, GND, PWM signal) with their own driver on board, so they need no relay: the ESP32 drives each fan's control input with a PWM signal and the fan does the switching. This makes fan speed continuous rather than on/off.
+The two cooling fans are plain 2-wire DC units. They have no control input of any kind, so there is nothing for the firmware to modulate: each fan sits on its own relay channel and is either running or stopped. Cooling is therefore on/off, and the only decision the firmware makes about the fans is whether they should run.
+
+A channel each, rather than both fans on one channel, costs nothing at build time and leaves the option of running a single fan later without rewiring.
 
 ---
 
@@ -56,18 +58,17 @@ The current temperature shall be available to other system modules and displayed
 Example configurable thresholds:
 
 ```cpp
-TEMP_FAN_ON   = 30.0 °C
-TEMP_FAN_OFF  = 27.0 °C
-TEMP_FAN_FULL = 36.0 °C
+TEMP_FAN_ON  = 30.0 °C
+TEMP_FAN_OFF = 27.0 °C
 ```
 
-Using separate ON and OFF thresholds provides hysteresis and prevents the fans from repeatedly starting and stopping around one temperature. TEMP_FAN_FULL is the top of the speed ramp described in section 3.4.
+Using separate ON and OFF thresholds provides hysteresis and prevents the fans from repeatedly starting and stopping around one temperature. With relay-switched fans this is not merely cosmetic: every transition is a mechanical contact operation against the fans' inrush current, so the gap between the two thresholds is what protects the relay. Widening it is cheap; narrowing it buys tighter temperature control at the cost of contact life.
 
 Example:
 
 ```text
 Temperature = 31°C
-→ Fans running, just above minimum speed
+→ Fans running
 
 Temperature = 29°C
 → Fans remain running (inside the hysteresis band)
@@ -117,7 +118,7 @@ The exact thresholds should remain configurable rather than hard-coded inside th
 
 # 3.4 Cooling Fan Control
 
-The two cooling fans shall automatically operate according to greenhouse temperature. Because they are PWM-driven, the decision has two parts: whether to run at all, and how fast.
+The two cooling fans shall automatically operate according to greenhouse temperature. They are relay-switched and have no control input, so there is exactly one decision to make: whether they run.
 
 Recommended control logic:
 
@@ -128,15 +129,15 @@ IF temperature >= FAN_ON_THRESHOLD
 IF temperature <= FAN_OFF_THRESHOLD
     Fans stopped
 
-WHILE running
-    speed = ramp from 1 to 100 across
-            FAN_ON_THRESHOLD .. FAN_FULL_THRESHOLD
-    command that same speed to both fans
+Otherwise
+    Fans hold whatever they were doing
 ```
 
-The speed is deliberately abstract. Each fan has its own usable duty window, because a DC fan only hums and stalls below some duty and gains little airflow near the top, and two fans of the same model rarely stall at the same point. The controller asks for 1-100 and each Fan maps that onto its own window, so the whole temperature ramp is spent where that fan actually works.
+That third case is the whole point of having two thresholds. Between FAN_OFF_THRESHOLD and FAN_ON_THRESHOLD neither branch fires, so the previous decision stands and a temperature drifting around a single setpoint cannot make the relays chatter.
 
-The fan controller should remember its current state so the PWM channel is not unnecessarily rewritten every loop iteration.
+Both fans are always commanded together — the rule is about the greenhouse, not about an individual fan. They are wired to separate channels so that a future rule *could* stage them, but no such rule exists today.
+
+The fan controller should remember its current state, so a fan is only switched on a real transition rather than being re-driven on every loop iteration.
 
 ---
 
@@ -519,33 +520,27 @@ They should not decide when an actuator should run.
 class Fan
 {
 public:
-    Fan(uint8_t pin,
-        uint32_t pwmFrequencyHz,
-        uint8_t pwmResolutionBits,
-        uint8_t minDutyPercent,
-        uint8_t maxDutyPercent,
-        bool inverted);
+    Fan(uint8_t pin, bool activeLow);
 
-    bool begin();
+    void begin();
 
-    // 0 stops the fan; 1-100 is mapped onto this fan's usable duty window.
-    void setSpeedPercent(uint8_t percent);
+    void on();
     void off();
 
-    uint8_t getSpeedPercent() const;
     bool isOn() const;
 
 private:
-    ESP32PWM pwm_;
+    uint8_t levelFor(bool on) const;
+
     uint8_t pin_;
-    uint8_t minDutyPercent_;
-    uint8_t maxDutyPercent_;
-    bool attached_;
-    uint8_t speedPercent_;
+    bool activeLow_;
+    bool state_;
 };
 ```
 
-One instance per fan. `begin()` returns false when no LEDC channel could be obtained; that fan is then inert and the condition is reported once in the init log rather than being allowed to fail silently.
+One instance per fan, each on its own relay channel. `begin()` drives the off level before the pin becomes an output and again afterwards, so a fan cannot click on while its GPIO is being configured.
+
+This is deliberately almost the same class as `Pump` below. They are kept separate because the pump is the one actuator that can cause damage if it misbehaves, and that leaves room for pump-specific protection — dry-run detection, a water-level interlock — without disturbing the fans. The duplication is the price of that separation and is accepted knowingly.
 
 ---
 
@@ -644,14 +639,13 @@ void ClimateController::update(const EnvironmentData& data)
         fansRunning_ = false;
     }
 
+    // Each Fan ignores a command that would not change its state, so
+    // these can be called every pass and the relays still only move
+    // on a real transition.
     if (fansRunning_)
     {
-        // 1 at FAN_ON_TEMP, 100 at FAN_FULL_TEMP. Each fan maps this
-        // onto its own usable duty window.
-        uint8_t speed = speedFor(data.temperature);
-
-        fan1_.setSpeedPercent(speed);
-        fan2_.setSpeedPercent(speed);
+        fan1_.on();
+        fan2_.on();
     }
     else
     {
@@ -908,11 +902,11 @@ Soil: 47%
 Page 3:
 
 ```text
-F1:64% F2:67%
+F1:ON F2:ON
 Vent:ON Pmp:OFF
 ```
 
-The fans show their commanded speed rather than ON/OFF, which moves the hatch and the pump onto the second line together.
+Each fan is shown separately even though the climate rule always moves them together: the two are on independent relay channels, and a disagreement between them on screen is the quickest way to spot a channel that has stopped answering. `F1:OFF F2:OFF` is 13 characters, the worst case, which leaves the hatch and the pump to share the second line.
 
 The display manager can switch pages every few seconds.
 
@@ -926,8 +920,8 @@ public:
 
     void update(
         const EnvironmentData& environment,
-        uint8_t fan1Percent,
-        uint8_t fan2Percent,
+        bool fan1State,
+        bool fan2State,
         bool pumpState,
         bool ventState
     );
@@ -953,8 +947,8 @@ namespace Pins
     constexpr uint8_t DHT = 4;
     constexpr uint8_t SOIL = 34;
 
-    constexpr uint8_t FAN1 = 25;    // PWM signal, no relay
-    constexpr uint8_t FAN2 = 33;    // PWM signal, no relay
+    constexpr uint8_t FAN1 = 25;    // relay channel, fan 1
+    constexpr uint8_t FAN2 = 33;    // relay channel, fan 2
     constexpr uint8_t PUMP = 26;
     constexpr uint8_t SERVO = 27;
 }
@@ -965,18 +959,12 @@ namespace Pins
 ```cpp
 namespace Settings
 {
-    constexpr float FAN_ON_TEMP   = 30.0F;
-    constexpr float FAN_OFF_TEMP  = 27.0F;
-    constexpr float FAN_FULL_TEMP = 36.0F;
+    constexpr float FAN_ON_TEMP  = 30.0F;
+    constexpr float FAN_OFF_TEMP = 27.0F;
 
-    constexpr uint32_t FAN_PWM_FREQUENCY_HZ   = 25000;
-    constexpr uint8_t  FAN_PWM_RESOLUTION_BITS = 10;
-
-    // Usable duty window per fan - CALIBRATE on real hardware.
-    constexpr uint8_t FAN1_MIN_DUTY_PERCENT = 30;
-    constexpr uint8_t FAN1_MAX_DUTY_PERCENT = 100;
-    constexpr uint8_t FAN2_MIN_DUTY_PERCENT = 30;
-    constexpr uint8_t FAN2_MAX_DUTY_PERCENT = 100;
+    // Relay polarity, same convention for the fans and the pump.
+    constexpr bool FAN_ACTIVE_LOW  = true;
+    constexpr bool PUMP_ACTIVE_LOW = true;
 
     constexpr float VENT_TEMP_THRESHOLD = 29.0F;
 
@@ -1197,13 +1185,14 @@ Light threshold
 Servo positions
 Pump watering duration
 Soil stabilization duration
-Fan PWM frequency
-Usable duty window of each fan
+Relay polarity (fans and pump)
 ```
 
 Calibration should happen with the actual greenhouse hardware rather than relying purely on theoretical values.
 
-To find a fan's usable duty window, drive that fan alone and lower its minimum duty a few points at a time until it no longer starts **from standstill**, then add a few points of margin. Expect the two fans to land on different numbers even when they are the same model. For the PWM frequency, 25 kHz is above hearing; if a fan's driver cannot follow it the fan will not respond or will only buzz, in which case drop to about 1 kHz and accept the audible tone.
+The fans need no calibration of their own — they are on or off — but their two thresholds do. Set the gap between FAN_ON_TEMP and FAN_OFF_TEMP by watching the greenhouse over a full day: if the relays click more than a few times an hour while the temperature hovers near the setpoint, the gap is too narrow. Widen it rather than accepting the clicking, since every cycle is wear on the contacts.
+
+Relay polarity is a one-time check per module. Drive a channel HIGH with nothing connected and listen: if the relay releases rather than pulls in, that module is active-low. Confirm it before the fans and pump are wired to their loads, so a wrong guess costs nothing.
 
 ---
 

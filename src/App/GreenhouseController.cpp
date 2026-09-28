@@ -15,18 +15,8 @@ GreenhouseController::GreenhouseController()
             Settings::SOIL_DRY_ADC,
             Settings::SOIL_WET_ADC,
             Settings::SOIL_INTERVAL_MS),
-      fan1_(Pins::FAN1,
-            Settings::FAN_PWM_FREQUENCY_HZ,
-            Settings::FAN_PWM_RESOLUTION_BITS,
-            Settings::FAN1_MIN_DUTY_PERCENT,
-            Settings::FAN1_MAX_DUTY_PERCENT,
-            Settings::FAN_PWM_INVERTED),
-      fan2_(Pins::FAN2,
-            Settings::FAN_PWM_FREQUENCY_HZ,
-            Settings::FAN_PWM_RESOLUTION_BITS,
-            Settings::FAN2_MIN_DUTY_PERCENT,
-            Settings::FAN2_MAX_DUTY_PERCENT,
-            Settings::FAN_PWM_INVERTED),
+      fan1_(Pins::FAN1, Settings::FAN_ACTIVE_LOW),
+      fan2_(Pins::FAN2, Settings::FAN_ACTIVE_LOW),
       pump_(Pins::PUMP, Settings::PUMP_ACTIVE_LOW),
       ventilation_(Pins::SERVO,
                    Settings::SERVO_CLOSED_ANGLE,
@@ -43,24 +33,14 @@ void GreenhouseController::begin()
     Serial.println(F("=== Smart Greenhouse starting ==="));
 
     // The actuators come up first, so the fans, pump and hatch are in a known
-    // safe state before anything else can take time. In particular the pump is
-    // driven off before its GPIO becomes an output.
-    const bool fan1Ready = fan1_.begin();
-    const bool fan2Ready = fan2_.begin();
+    // safe state before anything else can take time. Every one of them drives
+    // its off level before its GPIO becomes an output, so nothing twitches
+    // while the pins are being configured.
+    fan1_.begin();
+    fan2_.begin();
     pump_.begin();
     ventilation_.begin();
     Serial.println(F("[init] Actuators ready (fans stopped, pump off, hatch closed)"));
-
-    // A fan that could not get a PWM channel stays inert for the whole run,
-    // and nothing downstream would ever say so: the controller keeps
-    // commanding speeds and the telemetry keeps reporting them. Say it once,
-    // here, where the operator is already reading the init log.
-    if (!fan1Ready || !fan2Ready)
-    {
-        Serial.print(F("[init] WARNING - no PWM channel for fan"));
-        Serial.println(!fan1Ready && !fan2Ready ? F(" 1 and fan 2")
-                                                : (!fan1Ready ? F(" 1") : F(" 2")));
-    }
 
     // One Wire.begin() for the whole system: the BH1750 and the LCD share the
     // bus, so neither device class starts it.
@@ -121,8 +101,8 @@ void GreenhouseController::update()
 
     // 5. Refresh the display. Self-gated on its own interval.
     display_.update(environment_,
-                    fan1_.getSpeedPercent(),
-                    fan2_.getSpeedPercent(),
+                    fan1_.isOn(),
+                    fan2_.isOn(),
                     pump_.isOn(),
                     ventilation_.isOpen());
 
@@ -191,14 +171,14 @@ void GreenhouseController::logTelemetry()
     // calibration, and the state of every actuator.
     snprintf(line, sizeof(line),
              "T=%.1fC(%c) H=%.0f%%(%c) L=%.0flx(%c) S=%.0f%%(%c raw=%d) | "
-             "F1=%u%% F2=%u%% Vent=%s Pump=%s Irrig=%s",
+             "F1=%s F2=%s Vent=%s Pump=%s Irrig=%s",
              environment_.temperature,  environment_.temperatureValid ? 'v' : 'x',
              environment_.humidity,     environment_.humidityValid    ? 'v' : 'x',
              environment_.lightLux,     environment_.lightValid       ? 'v' : 'x',
              environment_.soilMoisture, environment_.soilValid        ? 'v' : 'x',
              soil_.getRawValue(),
-             static_cast<unsigned>(fan1_.getSpeedPercent()),
-             static_cast<unsigned>(fan2_.getSpeedPercent()),
+             fan1_.isOn() ? "ON" : "OFF",
+             fan2_.isOn() ? "ON" : "OFF",
              ventilation_.isOpen() ? "OPEN" : "SHUT",
              pump_.isOn() ? "ON" : "OFF",
              irrigationController_.getStateName());

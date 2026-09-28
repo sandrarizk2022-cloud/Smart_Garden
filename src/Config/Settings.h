@@ -17,50 +17,22 @@ namespace Settings
     // =====================================================================
     // Climate control - cooling fans
     // =====================================================================
-    // Two 5 V 3-pin fans (VCC, GND, PWM signal). There is no relay: the
-    // ESP32 drives each fan's control input with a PWM carrier and the fan's
-    // own driver does the switching, so speed is continuous rather than
-    // on/off.
+    // Two plain 2-wire DC fans, each on its own relay channel. They have no
+    // control input to modulate, so cooling is on or off - there is no speed
+    // to set and no duty to calibrate.
 
-    // ---- Temperature ramp -----------------------------------------------
+    // ---- Switching thresholds -------------------------------------------
 
-    // Below FAN_OFF_TEMP the fans are stopped. At FAN_ON_TEMP they start at
-    // their slowest usable speed and they reach full speed at FAN_FULL_TEMP.
-    // Between FAN_OFF_TEMP and FAN_ON_TEMP the fans hold whatever they were
-    // doing - the hysteresis gap that stops them starting and stopping around
-    // a single temperature (docs/README.md section 3.1).
-    constexpr float FAN_ON_TEMP   = 30.0F;
-    constexpr float FAN_OFF_TEMP  = 27.0F;
-    constexpr float FAN_FULL_TEMP = 36.0F;
-
-    // ---- PWM carrier, shared by both fans --------------------------------
-
-    // 25 kHz is above hearing, so the fans do not whine. CALIBRATE: if a
-    // fan's on-board driver cannot follow it (no response, or it only
-    // buzzes), drop to about 1 kHz and accept the audible tone.
-    constexpr uint32_t FAN_PWM_FREQUENCY_HZ = 25000;
-
-    // The LEDC peripheral trades resolution against frequency: 80 MHz /
-    // 25 kHz is 3200 counts, so 11 bits is the ceiling. 10 bits (1024 steps)
-    // stays comfortably inside it and is far finer than a fan can act on.
-    constexpr uint8_t FAN_PWM_RESOLUTION_BITS = 10;
-
-    // ---- Usable PWM range, per fan - CALIBRATE on real hardware ----------
-
-    // A DC fan does not turn at every duty. Below some duty the rotor only
-    // hums and stalls, and past some point the extra noise and current buy
-    // almost no airflow. These four numbers are that window, as a percentage
-    // of full scale, and each fan gets its own pair: two fans of the same
-    // model rarely stall at the same duty.
+    // At or above FAN_ON_TEMP the fans run; at or below FAN_OFF_TEMP they
+    // stop. Between the two they hold whatever they were doing
+    // (docs/README.md section 3.1).
     //
-    // ClimateController does not know these numbers. It asks for a speed of
-    // 1-100 and each Fan maps that onto its own window, so the whole
-    // temperature ramp is spent in the range where that fan actually works.
-    constexpr uint8_t FAN1_MIN_DUTY_PERCENT = 30;
-    constexpr uint8_t FAN1_MAX_DUTY_PERCENT = 100;
-
-    constexpr uint8_t FAN2_MIN_DUTY_PERCENT = 30;
-    constexpr uint8_t FAN2_MAX_DUTY_PERCENT = 100;
+    // The 3-degree gap is the only thing standing between a temperature that
+    // sits near the setpoint and a relay that chatters. It costs nothing to
+    // widen and buys contact life, so err on the side of a larger gap rather
+    // than a tighter grip on the target temperature.
+    constexpr float FAN_ON_TEMP  = 30.0F;
+    constexpr float FAN_OFF_TEMP = 27.0F;
 
     // =====================================================================
     // Climate control - ventilation hatch
@@ -135,10 +107,11 @@ namespace Settings
     //         (logic-level MOSFET driver)
     constexpr bool PUMP_ACTIVE_LOW = true;
 
-    // Fan control input:
-    // true  = inverted, 0% duty runs the fan at full speed
-    // false = higher duty means faster, which is the usual arrangement
-    constexpr bool FAN_PWM_INVERTED = false;
+    // Fan relay channels, one per fan. Same convention as the pump above,
+    // because they are the same kind of module:
+    // true  = the channel switches its fan ON when the input is driven LOW
+    // false = the channel switches its fan ON when the input is HIGH
+    constexpr bool FAN_ACTIVE_LOW = true;
 
     // Both are still to be confirmed on the bench. Flip the lines afterwards;
     // no class needs editing.

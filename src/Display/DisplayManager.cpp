@@ -45,8 +45,8 @@ bool DisplayManager::begin()
 }
 
 void DisplayManager::update(const EnvironmentData& environment,
-                            uint8_t fan1Percent,
-                            uint8_t fan2Percent,
+                            bool fan1State,
+                            bool fan2State,
                             bool pumpState,
                             bool ventState)
 {
@@ -89,7 +89,7 @@ void DisplayManager::update(const EnvironmentData& environment,
         break;
 
     default:
-        renderActuatorPage(fan1Percent, fan2Percent, pumpState, ventState);
+        renderActuatorPage(fan1State, fan2State, pumpState, ventState);
         break;
     }
 }
@@ -152,19 +152,20 @@ void DisplayManager::renderLightSoilPage(const EnvironmentData& environment)
     writeLine(1, line);
 }
 
-void DisplayManager::renderActuatorPage(uint8_t fan1Percent,
-                                       uint8_t fan2Percent,
-                                       bool pumpState,
-                                       bool ventState)
+void DisplayManager::renderActuatorPage(bool fan1State,
+                                        bool fan2State,
+                                        bool pumpState,
+                                        bool ventState)
 {
     char line[LINE_BUFFER_SIZE];
 
-    // The fans are no longer on or off, so their speed is what is worth
-    // showing. "F1:100% F2:100%" is 15 characters, the worst case on a
-    // 16-column display.
-    snprintf(line, sizeof(line), "F1:%u%% F2:%u%%",
-             static_cast<unsigned>(fan1Percent),
-             static_cast<unsigned>(fan2Percent));
+    // Each fan is on its own relay, so both are shown separately even though
+    // the climate rule always moves them together - a disagreement here is the
+    // quickest way to spot a relay that has stopped answering. "F1:OFF F2:OFF"
+    // is 13 characters, the worst case on a 16-column display.
+    snprintf(line, sizeof(line), "F1:%s F2:%s",
+             fan1State ? "ON" : "OFF",
+             fan2State ? "ON" : "OFF");
 
     writeLine(0, line);
 

@@ -2,12 +2,6 @@
 
 #include "../Config/Settings.h"
 
-// Speed scale handed to the fans: 0 stops them, 1 is the slowest each one
-// still turns at, 100 is its maximum. Mapping these onto real duty is the
-// Fan's job, because the usable window differs per fan.
-static constexpr uint8_t MIN_FAN_SPEED = 1;
-static constexpr uint8_t MAX_FAN_SPEED = 100;
-
 ClimateController::ClimateController(Fan& fan1, Fan& fan2, VentilationServo& ventilation)
     : fan1_(fan1),
       fan2_(fan2),
@@ -48,41 +42,19 @@ void ClimateController::updateFans(const EnvironmentData& data)
         fansRunning_ = false;
     }
 
-    if (!fansRunning_)
+    // Both fans follow the one decision. Each Fan ignores a command that would
+    // not change its state, so calling these every pass costs nothing and the
+    // relays only move on a real transition.
+    if (fansRunning_)
+    {
+        fan1_.on();
+        fan2_.on();
+    }
+    else
     {
         fan1_.off();
         fan2_.off();
-        return;
     }
-
-    // Both fans get the same demand. They may well answer it with different
-    // duties - that is exactly what their separate usable windows are for.
-    const uint8_t speed = speedFor(data.temperature);
-
-    fan1_.setSpeedPercent(speed);
-    fan2_.setSpeedPercent(speed);
-}
-
-uint8_t ClimateController::speedFor(float temperature)
-{
-    const float span = Settings::FAN_FULL_TEMP - Settings::FAN_ON_TEMP;
-
-    // A FAN_FULL_TEMP at or below FAN_ON_TEMP leaves no ramp to interpolate
-    // over. Rather than divide by zero, treat the whole running band as "flat
-    // out" - the safe reading of a configuration that says full speed is
-    // wanted the moment the fans start.
-    if (span <= 0.0F)
-    {
-        return MAX_FAN_SPEED;
-    }
-
-    const float fraction = constrain((temperature - Settings::FAN_ON_TEMP) / span,
-                                     0.0F,
-                                     1.0F);
-
-    const float steps = static_cast<float>(MAX_FAN_SPEED - MIN_FAN_SPEED);
-
-    return static_cast<uint8_t>(MIN_FAN_SPEED + lroundf(fraction * steps));
 }
 
 void ClimateController::updateVentilation(const EnvironmentData& data)
