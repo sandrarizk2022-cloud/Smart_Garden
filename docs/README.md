@@ -37,9 +37,12 @@ The system should operate autonomously and should not require manual interventio
 | Cooling Fans (x2)    | Greenhouse temperature regulation        |
 | Servo Motor          | Controls ventilation hatch/window        |
 | Water Pump           | Irrigation                               |
+| Passive Buzzer       | Audible indication that watering is running |
 | Relay Module         | Switches the two fans and the pump       |
 
 The ESP32 should not drive any of these loads directly. Three switched channels are needed — one per fan, plus the pump — so a 4-channel relay module is the convenient part, with the spare channel left for future use.
+
+The buzzer is not one of those channels. It draws little enough to hang straight off a GPIO through its own driver input, so the relay count is unchanged. It is passive, meaning it contains no oscillator: a steady level makes no sound and the firmware has to generate the tone itself. That is the only reason the buzzer needs anything more than the on/off treatment the pump gets.
 
 The two cooling fans are plain 2-wire DC units. They have no control input of any kind, so there is nothing for the firmware to modulate: each fan sits on its own relay channel and is either running or stopped. Cooling is therefore on/off, and the only decision the firmware makes about the fans is whether they should run.
 
@@ -332,6 +335,8 @@ src/
 │   └── SoilMoistureSensor.cpp
 │
 ├── Actuators/
+│   ├── Buzzer.h
+│   ├── Buzzer.cpp
 │   ├── Fan.h
 │   ├── Fan.cpp
 │   ├── Pump.h
@@ -564,6 +569,41 @@ private:
     bool state_;
 };
 ```
+
+---
+
+## Buzzer
+
+```cpp
+class Buzzer
+{
+public:
+    Buzzer(
+        uint8_t pin,
+        uint32_t toneHz,
+        uint8_t resolutionBits,
+        bool activeLow
+    );
+
+    bool begin();
+
+    void on();
+    void off();
+    void setState(bool on);
+
+    bool isOn() const;
+};
+```
+
+The buzzer sounds for exactly as long as the pump runs. That pairing is not made here and not in `IrrigationController` either: `GreenhouseController` sets the buzzer from `pump_.isOn()`, the same value it already hands to the display. The buzzer is an indicator, so it sits with the other indicators, and deriving its state from the pump rather than commanding the two side by side means they cannot drift apart. The pump stays the single source of truth, and the class carrying the watering safety logic is left alone.
+
+Unlike `Fan` and `Pump`, this class owns an LEDC channel. The buzzer is passive and has no oscillator, so `on()` cannot simply assert a level — it has to start a square wave.
+
+That has one consequence worth stating plainly, because it is a silent failure otherwise. `ESP32PWM::allocateTimer()` marks all four timers full on its *first* call and then frees only the timer named. `VentilationServo` claims timer 0 and pins it to the servo's 50 Hz, so the buzzer must claim a timer of its own — timer 1 — or it will find timer 0 at the wrong frequency, timers 1–3 marked full, and fail to attach without any complaint. `begin()` therefore returns a bool, and `GreenhouseController` logs the failure. Which of the two runs first does not matter: whichever gets there flips the library into explicit mode and the other frees only its own timer.
+
+A buzzer that fails to attach is not fatal. Watering continues, silently.
+
+`setState(bool)` exists for the mirror in `GreenhouseController`; `on()` and `off()` are there for anything that wants to say it directly.
 
 ---
 
@@ -815,6 +855,7 @@ private:
     Fan fan1_;
     Fan fan2_;
     Pump pump_;
+    Buzzer buzzer_;
     VentilationServo ventilation_;
 
     ClimateController climateController_;
@@ -835,8 +876,12 @@ Run climate controller
       ↓
 Run irrigation controller
       ↓
+Mirror pump state to buzzer
+      ↓
 Update display
 ```
+
+The buzzer step is a mirror rather than a decision: the controller reads `pump_.isOn()` and passes it on, exactly as it already passes the same value to the display. No rule is evaluated here, which is what keeps it inside the coordinator's remit.
 
 Importantly, the controller should not perform low-level operations such as:
 
@@ -950,6 +995,7 @@ namespace Pins
     constexpr uint8_t FAN1 = 25;    // relay channel, fan 1
     constexpr uint8_t FAN2 = 33;    // relay channel, fan 2
     constexpr uint8_t PUMP = 26;
+    constexpr uint8_t BUZZER = 13;
     constexpr uint8_t SERVO = 27;
 }
 ```
@@ -962,9 +1008,14 @@ namespace Settings
     constexpr float FAN_ON_TEMP  = 30.0F;
     constexpr float FAN_OFF_TEMP = 27.0F;
 
-    // Relay polarity, same convention for the fans and the pump.
-    constexpr bool FAN_ACTIVE_LOW  = true;
-    constexpr bool PUMP_ACTIVE_LOW = true;
+    // Driver polarity, same convention for fans, pump and buzzer.
+    constexpr bool FAN_ACTIVE_LOW    = true;
+    constexpr bool PUMP_ACTIVE_LOW   = true;
+    constexpr bool BUZZER_ACTIVE_LOW = true;
+
+    constexpr uint32_t BUZZER_TONE_HZ = 2700;
+
+    constexpr uint8_t BUZZER_RESOLUTION_BITS = 10;
 
     constexpr float VENT_TEMP_THRESHOLD = 29.0F;
 
@@ -1084,6 +1135,8 @@ Evaluate ventilation control
       ↓
 Evaluate irrigation state machine
       ↓
+Drive buzzer from pump state
+      ↓
 Refresh LCD when required
       ↓
 Repeat
@@ -1105,6 +1158,7 @@ LightSensor
 SoilMoistureSensor
 Fan
 Pump
+Buzzer
 VentilationServo
 LCD
 ```
@@ -1186,9 +1240,14 @@ Servo positions
 Pump watering duration
 Soil stabilization duration
 Relay polarity (fans and pump)
+Buzzer polarity and tone
 ```
 
 Calibration should happen with the actual greenhouse hardware rather than relying purely on theoretical values.
+
+The buzzer has two things to settle. Polarity first: at idle it must be silent, and a buzzer that sounds continuously except while watering has BUZZER_ACTIVE_LOW set the wrong way round. Then the tone — piezo output falls off sharply either side of resonance, so if 2700 Hz sounds weak, sweep BUZZER_TONE_HZ a few hundred hertz each way and keep the loudest.
+
+Watch for a chirp at power-on as well. Until `pinMode()` runs, the GPIO has no output driver and floats, which an active-low buzzer with no pull-up of its own may read as "sound". The firmware drives the silent level as early as it can, but it cannot drive a pin that is not yet an output; a 10k pull-up from the buzzer input to 3V3 closes the gap if it turns out to be audible.
 
 The fans need no calibration of their own — they are on or off — but their two thresholds do. Set the gap between FAN_ON_TEMP and FAN_OFF_TEMP by watching the greenhouse over a full day: if the relays click more than a few times an hour while the temperature hovers near the setpoint, the gap is too narrow. Widen it rather than accepting the clicking, since every cycle is wear on the contacts.
 

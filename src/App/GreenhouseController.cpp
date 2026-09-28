@@ -18,6 +18,10 @@ GreenhouseController::GreenhouseController()
       fan1_(Pins::FAN1, Settings::FAN_ACTIVE_LOW),
       fan2_(Pins::FAN2, Settings::FAN_ACTIVE_LOW),
       pump_(Pins::PUMP, Settings::PUMP_ACTIVE_LOW),
+      buzzer_(Pins::BUZZER,
+              Settings::BUZZER_TONE_HZ,
+              Settings::BUZZER_RESOLUTION_BITS,
+              Settings::BUZZER_ACTIVE_LOW),
       ventilation_(Pins::SERVO,
                    Settings::SERVO_CLOSED_ANGLE,
                    Settings::SERVO_OPEN_ANGLE),
@@ -32,15 +36,30 @@ void GreenhouseController::begin()
     Serial.println();
     Serial.println(F("=== Smart Greenhouse starting ==="));
 
-    // The actuators come up first, so the fans, pump and hatch are in a known
-    // safe state before anything else can take time. Every one of them drives
-    // its off level before its GPIO becomes an output, so nothing twitches
-    // while the pins are being configured.
+    // The actuators come up first, so the fans, pump, buzzer and hatch are in a
+    // known safe state before anything else can take time. Every one of them
+    // drives its off level before its GPIO becomes an output, so nothing
+    // twitches while the pins are being configured.
     fan1_.begin();
     fan2_.begin();
     pump_.begin();
     ventilation_.begin();
-    Serial.println(F("[init] Actuators ready (fans stopped, pump off, hatch closed)"));
+
+    // A buzzer that cannot claim an LEDC channel is not fatal - the greenhouse
+    // waters just as well in silence - but it must be reported, because a
+    // buzzer that never sounds is otherwise indistinguishable from one that
+    // simply has not been asked to (docs/README.md section 16).
+    if (buzzer_.begin())
+    {
+        Serial.println(F("[init] Actuators ready (fans stopped, pump off, "
+                         "hatch closed, buzzer silent)"));
+    }
+    else
+    {
+        Serial.println(F("[init] Actuators ready (fans stopped, pump off, "
+                         "hatch closed)"));
+        Serial.println(F("[init] Buzzer got no PWM channel - watering will be silent"));
+    }
 
     // One Wire.begin() for the whole system: the BH1750 and the LCD share the
     // bus, so neither device class starts it.
@@ -99,14 +118,23 @@ void GreenhouseController::update()
     // 3. and 4. Climate rules, then the irrigation state machine.
     runControllers();
 
-    // 5. Refresh the display. Self-gated on its own interval.
+    // 5. Sound the buzzer for exactly as long as the pump runs. The state is
+    //    derived from the pump rather than commanded alongside it, so the two
+    //    cannot drift apart, and the pump stays the single source of truth.
+    //
+    //    Done every pass instead of on the control interval: the call is
+    //    idempotent, so it costs nothing, and the buzzer then follows the pump
+    //    within one loop pass rather than up to CONTROL_INTERVAL_MS later.
+    buzzer_.setState(pump_.isOn());
+
+    // 6. Refresh the display. Self-gated on its own interval.
     display_.update(environment_,
                     fan1_.isOn(),
                     fan2_.isOn(),
                     pump_.isOn(),
                     ventilation_.isOpen());
 
-    // 6. Periodic telemetry over Serial.
+    // 7. Periodic telemetry over Serial.
     logTelemetry();
 }
 
@@ -171,7 +199,7 @@ void GreenhouseController::logTelemetry()
     // calibration, and the state of every actuator.
     snprintf(line, sizeof(line),
              "T=%.1fC(%c) H=%.0f%%(%c) L=%.0flx(%c) S=%.0f%%(%c raw=%d) | "
-             "F1=%s F2=%s Vent=%s Pump=%s Irrig=%s",
+             "F1=%s F2=%s Vent=%s Pump=%s Buzz=%s Irrig=%s",
              environment_.temperature,  environment_.temperatureValid ? 'v' : 'x',
              environment_.humidity,     environment_.humidityValid    ? 'v' : 'x',
              environment_.lightLux,     environment_.lightValid       ? 'v' : 'x',
@@ -181,6 +209,9 @@ void GreenhouseController::logTelemetry()
              fan2_.isOn() ? "ON" : "OFF",
              ventilation_.isOpen() ? "OPEN" : "SHUT",
              pump_.isOn() ? "ON" : "OFF",
+             // Redundant with Pump by construction, which is the point: it
+             // separates a broken mirror from a miswired buzzer on the bench.
+             buzzer_.isOn() ? "ON" : "OFF",
              irrigationController_.getStateName());
 
     Serial.println(line);

@@ -77,6 +77,25 @@ namespace Settings
     constexpr uint32_t MAX_PUMP_RUNTIME_MS = 10000;
 
     // =====================================================================
+    // Irrigation alarm - buzzer
+    // =====================================================================
+    // The buzzer sounds for exactly as long as the pump runs, so it needs no
+    // thresholds or timings of its own - it follows PUMP_DURATION_MS above.
+
+    // This is a passive buzzer: it has no oscillator inside, so a steady logic
+    // level makes no sound at all and the firmware has to generate the tone.
+    //
+    // 2700 Hz is the resonant peak of the usual piezo element, which is the
+    // loudest it will ever be for the least current. Moving far either side of
+    // it costs volume quickly.
+    constexpr uint32_t BUZZER_TONE_HZ = 2700;
+
+    // LEDC duty resolution for that tone. Ten bits is far inside what the
+    // peripheral allows at 2700 Hz and divides evenly for an exact 50% square
+    // wave, which is what a piezo wants.
+    constexpr uint8_t BUZZER_RESOLUTION_BITS = 10;
+
+    // =====================================================================
     // Soil probe calibration - CALIBRATE on real hardware
     // =====================================================================
 
@@ -113,8 +132,17 @@ namespace Settings
     // false = the channel switches its fan ON when the input is HIGH
     constexpr bool FAN_ACTIVE_LOW = true;
 
-    // Both are still to be confirmed on the bench. Flip the lines afterwards;
-    // no class needs editing.
+    // Buzzer driver input. Same convention again:
+    // true  = the buzzer sounds when the input is driven LOW
+    // false = the buzzer sounds when the input is HIGH
+    //
+    // For a passive buzzer this only decides the silent level, because the
+    // tone itself is a symmetric square wave and sounds the same either way.
+    // That silent level is the half worth getting right.
+    constexpr bool BUZZER_ACTIVE_LOW = true;
+
+    // All three are still to be confirmed on the bench. Flip the lines
+    // afterwards; no class needs editing.
 
     // =====================================================================
     // Timing - every subsystem is polled, nothing blocks

@@ -43,6 +43,16 @@ namespace Pins
     // directly (docs/README.md section 2).
     constexpr uint8_t PUMP = 26;
 
+    // Passive buzzer driver input, sounded while the pump runs.
+    //
+    // GPIO13 neither straps the boot mode nor emits a pulse while the chip
+    // comes up, which matters more here than on any other output: this is the
+    // one load built to be heard, so a boot-time twitch is a chirp at every
+    // reset. It is also off ADC1, leaving GPIO32 and the input-only 35/36/39
+    // free for a future analog sensor, and clear of the pins WROVER modules
+    // use for PSRAM.
+    constexpr uint8_t BUZZER = 13;
+
     // Servo PWM signal for the ventilation hatch.
     constexpr uint8_t SERVO = 27;
 

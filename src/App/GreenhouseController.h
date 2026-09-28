@@ -12,12 +12,14 @@
  * Update cycle (docs/README.md section 18):
  *
  *     read sensors -> build EnvironmentData -> climate rules
- *                  -> irrigation state machine -> display -> serial log
+ *                  -> irrigation state machine -> buzzer mirrors pump
+ *                  -> display -> serial log
  */
 #pragma once
 
 #include <Arduino.h>
 
+#include "../Actuators/Buzzer.h"
 #include "../Actuators/Fan.h"
 #include "../Actuators/Pump.h"
 #include "../Actuators/VentilationServo.h"
@@ -77,6 +79,10 @@ private:
     Fan fan1_;
     Fan fan2_;
     Pump pump_;
+
+    // Declared next to the pump because it does nothing but follow it.
+    Buzzer buzzer_;
+
     VentilationServo ventilation_;
 
     // ---- Control layer -----------------------------------------------------
