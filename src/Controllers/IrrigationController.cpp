@@ -18,6 +18,12 @@ void IrrigationController::begin()
 
 void IrrigationController::update(float moisture, bool moistureValid)
 {
+    // Recorded before the switch, so they always describe the decision this
+    // call is about to take whichever branch runs. Nothing below reads them;
+    // they exist purely so describeState() can explain itself afterwards.
+    lastMoisture_ = moisture;
+    lastMoistureValid_ = moistureValid;
+
     switch (state_)
     {
     case IrrigationState::IDLE:
@@ -110,6 +116,61 @@ const char* IrrigationController::getStateName() const
     }
 
     return "UNKNOWN";
+}
+
+void IrrigationController::describeState(char* buf, size_t len) const
+{
+    // The label comes from getStateName() rather than being spelled again
+    // here, so the two can never disagree about what a state is called.
+    const char* name = getStateName();
+
+    // Written before the switch, so a state_ that somehow falls outside the
+    // enum still leaves a sane string behind instead of whatever the caller's
+    // stack happened to hold.
+    snprintf(buf, len, "%s", name);
+
+    switch (state_)
+    {
+    case IrrigationState::IDLE:
+        if (!lastMoistureValid_)
+        {
+            // The probe guard is what is holding the pump, not the threshold -
+            // a distinction worth making, because no threshold change will
+            // move this one.
+            snprintf(buf, len, "%s(no-probe)", name);
+        }
+        else
+        {
+            // Both halves of the comparison, because either one explains an
+            // idle pump: soil that is genuinely wet enough, or a build running
+            // a threshold that is no longer the one in Settings.h.
+            snprintf(buf, len, "%s(%.0f>=%.0f)",
+                     name, lastMoisture_, Settings::MOISTURE_THRESHOLD);
+        }
+        break;
+
+    case IrrigationState::WATERING:
+        snprintf(buf, len, "%s(%lus/%lus)",
+                 name,
+                 static_cast<unsigned long>(elapsedInState() / 1000UL),
+                 static_cast<unsigned long>(Settings::PUMP_DURATION_MS / 1000UL));
+        break;
+
+    case IrrigationState::WAITING:
+    {
+        // Clamped rather than subtracted blind: between two update() calls the
+        // elapsed time can pass the wait before the transition runs, and the
+        // unsigned underflow would report roughly 49 days remaining.
+        const uint32_t elapsed = elapsedInState();
+        const uint32_t remaining = (elapsed >= Settings::SOIL_STABILIZATION_MS)
+                                       ? 0U
+                                       : (Settings::SOIL_STABILIZATION_MS - elapsed);
+
+        snprintf(buf, len, "%s(%lus left)",
+                 name, static_cast<unsigned long>(remaining / 1000UL));
+        break;
+    }
+    }
 }
 
 void IrrigationController::enterState(IrrigationState next)

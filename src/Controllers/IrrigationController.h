@@ -54,6 +54,23 @@ public:
     // Short label for the serial log and the LCD.
     const char* getStateName() const;
 
+    // Enough for the longest string describeState() can produce, plus the
+    // terminator.
+    static constexpr size_t STATE_DETAIL_SIZE = 24;
+
+    /**
+     * Writes a short explanation of the current state into buf: the comparison
+     * that is holding the pump off, or how far through a burst or a wait the
+     * machine is.
+     *
+     * getStateName() says where the machine is; this says why. A pump that
+     * never starts looks the same from outside whether the soil is already wet
+     * enough, the probe is untrusted, or the running build simply carries an
+     * older MOISTURE_THRESHOLD than the one in Settings.h - and those three
+     * need telling apart on the bench.
+     */
+    void describeState(char* buf, size_t len) const;
+
     // Forces the pump off and moves to WAITING. Used for fault handling; the
     // stabilisation wait still applies afterwards, so an abort cannot turn into
     // rapid retries.
@@ -71,4 +88,11 @@ private:
     IrrigationState state_ = IrrigationState::IDLE;
 
     uint32_t stateStartTime_ = 0;
+
+    // The inputs the last decision was taken on. Kept so describeState() can
+    // report the comparison that actually ran, rather than re-reading a sensor
+    // that has moved on since - the control interval and the log interval are
+    // not the same, so the two would otherwise disagree.
+    float lastMoisture_      = 0.0F;
+    bool  lastMoistureValid_ = false;
 };

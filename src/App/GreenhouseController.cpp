@@ -36,6 +36,12 @@ void GreenhouseController::begin()
     Serial.println();
     Serial.println(F("=== Smart Greenhouse starting ==="));
 
+    // Which build is talking, and the numbers it is actually going to use.
+    // A threshold edited in Settings.h but never linked or flashed looks
+    // exactly like a broken state machine from the serial log, so the firmware
+    // names itself and its settings before it reports anything else.
+    logBuildBanner();
+
     // The actuators come up first, so the fans, pump, buzzer and hatch are in a
     // known safe state before anything else can take time. Every one of them
     // drives its off level before its GPIO becomes an output, so nothing
@@ -181,6 +187,41 @@ void GreenhouseController::runControllers()
     irrigationController_.update(environment_.soilMoisture, environment_.soilValid);
 }
 
+void GreenhouseController::logBuildBanner()
+{
+    Serial.print(F("[init] Build "));
+    Serial.print(F(__DATE__));
+    Serial.print(' ');
+    Serial.println(F(__TIME__));
+
+    char banner[120];
+
+    // The irrigation rule in numbers. These are the values compiled into this
+    // image, not the values in the editor - which is the entire point.
+    snprintf(banner, sizeof(banner),
+             "[init] Irrigation: water below %.1f%% | burst %lu ms | "
+             "wait %lu ms | ceiling %lu ms",
+             Settings::MOISTURE_THRESHOLD,
+             static_cast<unsigned long>(Settings::PUMP_DURATION_MS),
+             static_cast<unsigned long>(Settings::SOIL_STABILIZATION_MS),
+             static_cast<unsigned long>(Settings::MAX_PUMP_RUNTIME_MS));
+
+    Serial.println(banner);
+
+    // The window a raw count has to land in to be read as soil rather than as
+    // a wiring fault - the other thing that silently holds the pump off. The
+    // bounds are derived from the same constants SoilMoistureSensor checks
+    // against, so the banner cannot drift away from the check.
+    snprintf(banner, sizeof(banner),
+             "[init] Soil calib: dry=%d wet=%d | valid raw %d..%d",
+             Settings::SOIL_DRY_ADC,
+             Settings::SOIL_WET_ADC,
+             Settings::SOIL_WET_ADC - Settings::SOIL_FAULT_MARGIN_ADC,
+             Settings::SOIL_DRY_ADC + Settings::SOIL_FAULT_MARGIN_ADC);
+
+    Serial.println(banner);
+}
+
 void GreenhouseController::logTelemetry()
 {
     const uint32_t now = millis();
@@ -192,7 +233,12 @@ void GreenhouseController::logTelemetry()
 
     lastLogTime_ = now;
 
-    char line[160];
+    char line[208];
+
+    // Not just which state irrigation is in, but why it is there: the
+    // comparison holding the pump off, or the time left to run.
+    char irrigation[IrrigationController::STATE_DETAIL_SIZE];
+    irrigationController_.describeState(irrigation, sizeof(irrigation));
 
     // One line per sample, everything needed to verify the system on the bench:
     // the readings, which of them are trusted, the raw ADC count for soil
@@ -212,7 +258,7 @@ void GreenhouseController::logTelemetry()
              // Redundant with Pump by construction, which is the point: it
              // separates a broken mirror from a miswired buzzer on the bench.
              buzzer_.isOn() ? "ON" : "OFF",
-             irrigationController_.getStateName());
+             irrigation);
 
     Serial.println(line);
 }

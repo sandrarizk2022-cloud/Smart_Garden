@@ -53,6 +53,11 @@ private:
     // CONTROL_INTERVAL_MS.
     void runControllers();
 
+    // Prints the build stamp and the control constants this image was compiled
+    // with, once at startup. Without it the serial log cannot distinguish a
+    // misbehaving controller from a source change that was never flashed.
+    void logBuildBanner();
+
     // One-line telemetry: readings, validity, actuator states, irrigation state.
     void logTelemetry();
 
